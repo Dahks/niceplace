@@ -78,8 +78,6 @@
 
 <main>
   <header>
-    <h1>🎬 Movie Explorer</h1>
-    
     <div class="search-bar">
       <input 
         type="text" 
