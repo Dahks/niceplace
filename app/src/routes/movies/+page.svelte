@@ -1,274 +1,150 @@
-<script>
+<script lang="ts">
   import { onMount } from 'svelte';
+  import { page } from "$app/stores";
+  import { fade, slide } from 'svelte/transition';
 
-  // --- CONFIGURATION ---
-  // Access the variable from the .env file (must start with VITE_)
   const API_KEY = import.meta.env.VITE_TMDB_API_KEY;
   const BASE_URL = 'https://api.themoviedb.org/3';
   const IMAGE_URL = 'https://image.tmdb.org/t/p/w500';
+  const RUST_API = 'http://localhost:3000/movies';
 
-  // --- STATE ---
-  let movies = [];
+  let movies: any[] = [];
   let searchQuery = '';
   let loading = false;
-  let error = null;
-
-  // Future feature: "Collection" storage
-  // For now, we just track IDs in a simple Set to show the UI working
-  let collection = new Set();
-
-  // --- FUNCTIONS ---
+  let savedMovies: any[] = []; 
 
   async function fetchMovies() {
-    // Safety check for the API key
-    if (!API_KEY) {
-      error = "Missing API Key! Make sure VITE_TMDB_API_KEY is in your .env file and you have restarted the server.";
-      return;
-    }
-
     loading = true;
-    error = null;
-
     try {
-      // If search is empty, fetch popular movies. If not, search.
       const endpoint = searchQuery 
         ? `${BASE_URL}/search/movie?api_key=${API_KEY}&query=${encodeURIComponent(searchQuery)}`
         : `${BASE_URL}/movie/popular?api_key=${API_KEY}`;
-
       const res = await fetch(endpoint);
       const data = await res.json();
-
-      if (res.ok) {
-        movies = data.results || [];
-      } else {
-        throw new Error(data.status_message || 'Failed to fetch');
-      }
-    } catch (e) {
-      error = e.message;
-    } finally {
-      loading = false;
-    }
+      if (res.ok) movies = data.results || [];
+    } catch (e) { console.error(e); } 
+    finally { loading = false; }
   }
 
-  // Handle the "Save to Collection" button
-  function toggleCollection(movie) {
-    // Svelte reactivity requires reassignment for Sets/Arrays to update view
-    const newCollection = new Set(collection);
-    
-    if (newCollection.has(movie.id)) {
-      newCollection.delete(movie.id);
+  async function fetchSaved() {
+    try {
+        const res = await fetch(RUST_API);
+        if (res.ok) savedMovies = await res.json();
+    } catch (e) { console.error("API offline?"); }
+  }
+
+  async function toggleCollection(movie: any) {
+    const savedEntry = savedMovies.find(m => m.tmdb_id === movie.id);
+
+    if (savedEntry) {
+        // Remove
+        savedMovies = savedMovies.filter(m => m.tmdb_id !== movie.id);
+        await fetch(`${RUST_API}/${movie.id}`, { method: 'DELETE' });
     } else {
-      newCollection.add(movie.id);
-      // This is where we will eventually add the 'vibe' note
-      console.log(`Saved ${movie.title} to collection`);
+        // Add
+        const comment = prompt(`Add a note for "${movie.title}":`, "Must watch!") || "";
+        if (!comment) return;
+
+        const newSave = {
+            tmdb_id: movie.id,
+            title: movie.title,
+            comment: comment,
+            user_name: $page.data.session?.user?.name || "Anonymous",
+            poster_path: movie.poster_path,
+            release_date: movie.release_date
+        };
+        savedMovies = [newSave, ...savedMovies];
+
+        await fetch(RUST_API, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(newSave)
+        });
     }
-    
-    collection = newCollection;
   }
 
-  function handleSearch() {
-    fetchMovies();
-  }
+  function handleSearch() { fetchMovies(); }
 
-  // Load popular movies on first render
-  onMount(() => {
-    fetchMovies();
+  onMount(() => { 
+    fetchMovies(); 
+    fetchSaved(); 
   });
 </script>
 
-<main>
-  <header>
-    <div class="search-bar">
-      <input 
-        type="text" 
-        placeholder="Search for a movie..." 
-        bind:value={searchQuery} 
-        on:keydown={(e) => e.key === 'Enter' && handleSearch()}
-      />
-      <button on:click={handleSearch} disabled={loading}>
-        {loading ? 'Searching...' : 'Search'}
-      </button>
-    </div>
-  </header>
-
-  {#if error}
-    <div class="error">⚠️ {error}</div>
+<main class="max-w-7xl mx-auto p-8 text-gray-100">
+  
+  {#if savedMovies.length > 0}
+      <div class="mb-12" transition:slide>
+        <div class="flex justify-between items-end mb-6">
+            <h2 class="text-2xl font-bold text-white">Just Added</h2>
+            <a href="/collection" class="text-indigo-400 text-sm hover:text-indigo-300">View All &rarr;</a>
+        </div>
+        
+        <div class="flex gap-4 overflow-x-auto pb-4 scrollbar-hide snap-x">
+            {#each savedMovies.slice(0, 5) as saved (saved.tmdb_id)}
+                <div 
+                    class="relative flex-shrink-0 w-[140px] bg-gray-800 rounded-lg overflow-hidden border border-gray-700 shadow-xl snap-start group"
+                    transition:fade
+                >
+                    <div class="aspect-[2/3] bg-gray-900 relative">
+                        {#if saved.poster_path}
+                            <img src={IMAGE_URL + saved.poster_path} alt={saved.title} class="w-full h-full object-cover" />
+                        {:else}
+                            <div class="w-full h-full flex items-center justify-center text-xs text-gray-400">{saved.title}</div>
+                        {/if}
+                    </div>
+                </div>
+            {/each}
+        </div>
+      </div>
   {/if}
 
-  <div class="movie-grid">
+  <div class="text-center mb-10">
+      <h1 class="text-4xl font-extrabold mb-4">Discover Movies</h1>
+      <div class="search-bar flex gap-2 max-w-xl mx-auto">
+        <input 
+          type="text" 
+          class="flex-1 p-4 rounded-xl border border-gray-700 bg-gray-800 text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 transition"
+          placeholder="Search TMDB..." 
+          bind:value={searchQuery} 
+          on:keydown={(e) => e.key === 'Enter' && handleSearch()}
+        />
+        <button 
+          class="px-8 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-bold transition"
+          on:click={handleSearch} 
+          disabled={loading}
+        >
+          {loading ? '...' : 'Search'}
+        </button>
+      </div>
+  </div>
+
+  <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-6">
     {#each movies as movie (movie.id)}
-      <div class="card">
-        <div class="poster-wrapper">
+      <div class="bg-gray-800 rounded-xl overflow-hidden shadow-lg hover:-translate-y-2 transition duration-300 relative group border border-gray-700">
+        <div class="relative aspect-[2/3] bg-gray-900">
           {#if movie.poster_path}
-            <img src={IMAGE_URL + movie.poster_path} alt={movie.title} />
+            <img src={IMAGE_URL + movie.poster_path} alt={movie.title} class="w-full h-full object-cover" />
           {:else}
-            <div class="no-image">No Image</div>
+            <div class="flex items-center justify-center h-full text-gray-500 text-sm">No Image</div>
           {/if}
           
           <button 
-            class="save-btn {collection.has(movie.id) ? 'saved' : ''}"
+            class="absolute top-2 right-2 w-10 h-10 rounded-full flex items-center justify-center text-2xl transition shadow-xl backdrop-blur-sm"
+            class:bg-white={!savedMovies.some(m => m.tmdb_id === movie.id)}
+            class:text-gray-300={!savedMovies.some(m => m.tmdb_id === movie.id)}
+            class:bg-red-500={savedMovies.some(m => m.tmdb_id === movie.id)}
+            class:text-white={savedMovies.some(m => m.tmdb_id === movie.id)}
             on:click={() => toggleCollection(movie)}
-            title="Save to Collection"
           >
-            {collection.has(movie.id) ? '♥' : '♡'}
+            {savedMovies.some(m => m.tmdb_id === movie.id) ? '♥' : '♡'}
           </button>
         </div>
-
-        <div class="info">
-          <h3>{movie.title}</h3>
-          <p class="date">{movie.release_date ? movie.release_date.split('-')[0] : 'Unknown'}</p>
-          <p class="overview">{movie.overview.slice(0, 100)}...</p>
+        <div class="p-4">
+            <h3 class="font-bold text-white text-sm mb-1 truncate">{movie.title}</h3>
+            <p class="text-gray-500 text-xs">{movie.release_date?.split('-')[0] || 'Unknown'}</p>
         </div>
       </div>
-    {:else}
-      {#if !loading && !error}
-        <p>No movies found. Try a different search.</p>
-      {/if}
     {/each}
   </div>
 </main>
-
-<style>
-  :global(body) {
-    font-family: sans-serif;
-    background: #1a1a1a;
-    color: #fff;
-    margin: 0;
-  }
-
-  main {
-    max-width: 1200px;
-    margin: 0 auto;
-    padding: 20px;
-  }
-
-  header {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    margin-bottom: 40px;
-  }
-
-  h1 { margin-bottom: 20px; }
-
-  .search-bar {
-    display: flex;
-    gap: 10px;
-    width: 100%;
-    max-width: 500px;
-  }
-
-  input {
-    flex: 1;
-    padding: 10px;
-    border-radius: 4px;
-    border: none;
-    font-size: 16px;
-  }
-
-  button {
-    padding: 10px 20px;
-    background: #ff3e00;
-    color: white;
-    border: none;
-    border-radius: 4px;
-    cursor: pointer;
-    font-weight: bold;
-  }
-
-  button:disabled { opacity: 0.7; cursor: not-allowed; }
-
-  /* Grid Layout */
-  .movie-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
-    gap: 2rem;
-  }
-
-  /* Card Styling */
-  .card {
-    background: #2a2a2a;
-    border-radius: 8px;
-    overflow: hidden;
-    transition: transform 0.2s;
-    position: relative;
-  }
-
-  .card:hover {
-    transform: translateY(-5px);
-  }
-
-  .poster-wrapper {
-    position: relative;
-    aspect-ratio: 2/3;
-    background: #333;
-  }
-
-  img {
-    width: 100%;
-    height: 100%;
-    object-fit: cover;
-  }
-
-  .no-image {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    height: 100%;
-    color: #666;
-  }
-
-  .info {
-    padding: 15px;
-  }
-
-  h3 {
-    margin: 0 0 5px 0;
-    font-size: 1.1rem;
-  }
-
-  .date {
-    color: #888;
-    font-size: 0.9rem;
-    margin-bottom: 10px;
-  }
-
-  .overview {
-    font-size: 0.85rem;
-    color: #ccc;
-    line-height: 1.4;
-  }
-
-  /* Save Button Styling */
-  .save-btn {
-    position: absolute;
-    top: 10px;
-    right: 10px;
-    background: rgba(0,0,0,0.6);
-    border-radius: 50%;
-    width: 35px;
-    height: 35px;
-    padding: 0;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 1.5rem;
-    line-height: 0;
-    transition: background 0.2s;
-    border: none;
-    color: white;
-    cursor: pointer;
-  }
-
-  .save-btn:hover { background: rgba(0,0,0,0.9); }
-  .save-btn.saved { color: #ff3e00; }
-  
-  .error {
-    color: #ffcccc;
-    background: #cc0000;
-    padding: 10px;
-    border-radius: 4px;
-    text-align: center;
-    margin-bottom: 20px;
-  }
-</style>
